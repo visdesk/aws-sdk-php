@@ -2,6 +2,7 @@
 namespace Aws\Credentials;
 
 use Aws;
+use Aws\CacheInterface;
 use Aws\Exception\CredentialsException;
 use GuzzleHttp\Promise;
 
@@ -29,7 +30,7 @@ use GuzzleHttp\Promise;
  * $a = CredentialProvider::ini(null, '/path/to/file.ini');
  * // Then try an INI file at this location.
  * $b = CredentialProvider::ini(null, '/path/to/other-file.ini');
- * // Then try loading from envrionment variables.
+ * // Then try loading from environment variables.
  * $c = CredentialProvider::env();
  * // Combine the three providers together.
  * $composed = CredentialProvider::chain($a, $b, $c);
@@ -49,23 +50,28 @@ class CredentialProvider
     /**
      * Create a default credential provider that first checks for environment
      * variables, then checks for the "default" profile in ~/.aws/credentials,
-     * and finally checks for credentials using EC2 instance profile
-     * credentials.
+     * then checks for "profile default" profile in ~/.aws/config (which is
+     * the default profile of AWS CLI), then tries to make a GET Request to
+     * fetch credentials if Ecs environment variable is presented, and finally
+     * checks for EC2 instance profile credentials.
      *
      * This provider is automatically wrapped in a memoize function that caches
      * previously provided credentials.
      *
-     * @param array $config Optional array of instance profile credentials
+     * @param array $config Optional array of ecs/instance profile credentials
      *                      provider options.
+     *
      * @return callable
      */
     public static function defaultProvider(array $config = [])
     {
+        $localCredentialProviders = self::localCredentialProviders();
+        $remoteCredentialProviders = self::remoteCredentialProviders($config);
+
         return self::memoize(
-            self::chain(
-                self::env(),
-                self::ini(),
-                self::instanceProfile($config)
+            call_user_func_array(
+                'self::chain',
+                array_merge($localCredentialProviders, $remoteCredentialProviders)
             )
         );
     }
@@ -157,6 +163,49 @@ class CredentialProvider
     }
 
     /**
+     * Wraps a credential provider and saves provided credentials in an
+     * instance of Aws\CacheInterface. Forwards calls when no credentials found
+     * in cache and updates cache with the results.
+     *
+     * Defaults to using a simple file-based cache when none provided.
+     *
+     * @param callable $provider Credentials provider function to wrap
+     * @param CacheInterface $cache Cache to store credentials
+     * @param string|null $cacheKey (optional) Cache key to use
+     *
+     * @return callable
+     */
+    public static function cache(
+        callable $provider,
+        CacheInterface $cache,
+        $cacheKey = null
+    ) {
+        $cacheKey = $cacheKey ?: 'aws_cached_credentials';
+
+        return function () use ($provider, $cache, $cacheKey) {
+            $found = $cache->get($cacheKey);
+            if ($found instanceof CredentialsInterface && !$found->isExpired()) {
+                return Promise\promise_for($found);
+            }
+
+            return $provider()
+                ->then(function (CredentialsInterface $creds) use (
+                    $cache,
+                    $cacheKey
+                ) {
+                    $cache->set(
+                        $cacheKey,
+                        $creds,
+                        null === $creds->getExpiration() ?
+                            0 : $creds->getExpiration() - time()
+                    );
+
+                    return $creds;
+                });
+        };
+    }
+
+    /**
      * Provider that creates credentials from environment variables
      * AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN.
      *
@@ -170,7 +219,7 @@ class CredentialProvider
             $secret = getenv(self::ENV_SECRET);
             if ($key && $secret) {
                 return Promise\promise_for(
-                    new Credentials($key, $secret, getenv(self::ENV_SESSION))
+                    new Credentials($key, $secret, getenv(self::ENV_SESSION) ?: NULL)
                 );
             }
 
@@ -194,13 +243,40 @@ class CredentialProvider
     }
 
     /**
+     * Credential provider that creates credentials using
+     * ecs credentials by a GET request, whose uri is specified
+     * by environment variable
+     *
+     * @param array $config Array of configuration data.
+     *
+     * @return EcsCredentialProvider
+     * @see Aws\Credentials\EcsCredentialProvider for $config details.
+     */
+    public static function ecsCredentials(array $config = [])
+    {
+        return new EcsCredentialProvider($config);
+    }
+
+    /**
+     * Credential provider that creates credentials using assume role
+     *
+     * @param array $config Array of configuration data
+     * @return callable
+     * @see Aws\Credentials\AssumeRoleCredentialProvider for $config details.
+     */
+    public static function assumeRole(array $config=[])
+    {
+        return new AssumeRoleCredentialProvider($config);
+    }
+
+    /**
      * Credentials provider that creates credentials using an ini file stored
      * in the current user's home directory.
      *
      * @param string|null $profile  Profile to use. If not specified will use
-     *                              the "default" profile.
+     *                              the "default" profile in "~/.aws/credentials".
      * @param string|null $filename If provided, uses a custom filename rather
-     *                              than looking in the home directory for the
+     *                              than looking in the home directory.
      *
      * @return callable
      */
@@ -227,16 +303,71 @@ class CredentialProvider
                     . "'$profile' ($filename)");
             }
 
+            if (empty($data[$profile]['aws_session_token'])) {
+                $data[$profile]['aws_session_token']
+                    = isset($data[$profile]['aws_security_token'])
+                        ? $data[$profile]['aws_security_token']
+                        : null;
+            }
+
             return Promise\promise_for(
                 new Credentials(
                     $data[$profile]['aws_access_key_id'],
                     $data[$profile]['aws_secret_access_key'],
-                    isset($data[$profile]['aws_security_token'])
-                        ? $data[$profile]['aws_security_token']
-                        : null
+                    $data[$profile]['aws_session_token']
                 )
             );
         };
+    }
+
+    /**
+     * Local credential providers returns a list of local credential providers
+     * in following order:
+     *  - credentials from environment variables
+     *  - 'default' profile in '.aws/credentials' file
+     *  - 'profile default' profile in '.aws/config' file
+     *
+     * @return array
+     */
+    private static function localCredentialProviders()
+    {
+        return [
+            self::env(),
+            self::ini(),
+            self::ini('profile default', self::getHomeDir() . '/.aws/config')
+        ];
+    }
+
+    /**
+     * Remote credential providers returns a list of credentials providers
+     * for the remote endpoints such as EC2 or ECS Roles.
+     *
+     * @param array $config Array of configuration data.
+     *
+     * @return array
+     * @see Aws\Credentials\InstanceProfileProvider for $config details.
+     * @see Aws\Credentials\EcsCredentialProvider for $config details.
+     */
+    private static function remoteCredentialProviders(array $config = [])
+    {
+        if (!empty(getenv(EcsCredentialProvider::ENV_URI))) {
+            $providers['ecs'] = self::ecsCredentials($config);
+        }
+        $providers['instance'] = self::instanceProfile($config);
+
+        if (isset($config['credentials'])
+            && $config['credentials'] instanceof CacheInterface
+        ) {
+            foreach ($providers as $key => $provider) {
+                $providers[$key] = self::cache(
+                    $provider,
+                    $config['credentials'],
+                    'aws_cached_' . $key . '_credentials'
+                );
+            }
+        }
+
+        return $providers;
     }
 
     /**

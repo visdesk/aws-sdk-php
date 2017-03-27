@@ -33,7 +33,7 @@ process as easy as possible.
 
     try {
         $result = $uploader->upload();
-        echo "Upload complete: {$result['ObjectURL'}\n";
+        echo "Upload complete: {$result['ObjectURL']}\n";
     } catch (MultipartUploadException $e) {
         echo $e->getMessage() . "\n";
     }
@@ -107,6 +107,32 @@ to be uploaded.
 ``UploadState`` objects are serializable, so it's also possible to resume an
 upload in a different process. You can also get the ``UploadState`` object even
 when you are not handling an exception by calling ``$uploader->getState()``.
+
+.. important::
+
+    Streams passed in as a source to a ``MultipartUploader`` will not be
+    automatically rewound before uploading. If you are using a stream instead of a
+    file path in a loop similar to the above example, you will need to reset the
+    ``$source`` variable inside of the ``catch`` block.
+
+    .. code-block:: php
+
+        $source = fopen('/path/to/large/file.zip', 'rb');
+        $uploader = new MultipartUploader($s3Client, $source, [
+            'bucket' => 'your-bucket',
+            'key'    => 'my-file.zip',
+        ]);
+
+        do {
+            try {
+                $result = $uploader->upload();
+            } catch (MultipartUploadException $e) {
+                rewind($source);
+                $uploader = new MultipartUploader($s3Client, $source, [
+                    'state' => $e->getState(),
+                ]);
+            }
+        } while (!isset($result));
 
 Aborting a multipart upload
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -191,3 +217,27 @@ The following configuration options are valid:
     multipart upload and that is used to resume a previous upload. When this
     option is provided, the ``bucket``, ``key``, and ``part_size`` options
     are ignored.
+
+Multipart Copies
+----------------
+
+The SDK also includes a ``MultipartCopy`` object that is used in a similar manner
+to the ``MultipartUploader`` but is designed for copying objects between 5GB and
+5TB in size within S3.
+
+.. code-block:: php
+
+    use Aws\S3\MultipartCopy;
+    use Aws\Exception\MultipartUploadException;
+
+    $copier = new MultipartCopy($s3Client, '/bucket/key?versionId=foo', [
+        'bucket' => 'your-bucket',
+        'key'    => 'my-file.zip',
+    ]);
+
+    try {
+        $result = $copier->copy();
+        echo "Copy complete: {$result['ObjectURL']}\n";
+    } catch (MultipartUploadException $e) {
+        echo $e->getMessage() . "\n";
+    }

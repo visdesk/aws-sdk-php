@@ -298,6 +298,71 @@ class ValidatorTest extends \PHPUnit_Framework_TestCase
                 ['foo' => Psr7\stream_for('test')],
                 true
             ],
+            [
+                [
+                    'type' => 'structure',
+                    'members' => ['foo' => [
+                        'type' => 'string',
+                        'min'  => 10,
+                        'max'  => 1,
+                    ]]
+                ],
+                ['foo' => 'bar'],
+                "Found 2 errors while validating the input provided for the Foo operation:\n"
+                . "[foo] expected string length to be >= 10, but found string length of 3\n"
+                . "[foo] expected string length to be <= 1, but found string length of 3"
+            ],
+            [
+                [
+                    'type' => 'structure',
+                    'members' => ['foo' => [
+                        'type' => 'integer',
+                        'min'  => 10,
+                        'max'  => 1,
+                    ]]
+                ],
+                ['foo' => 3],
+                "Found 2 errors while validating the input provided for the Foo operation:\n"
+                . "[foo] expected numeric value to be >= 10, but found numeric value of 3\n"
+                . "[foo] expected numeric value to be <= 1, but found numeric value of 3"
+            ],
+            [
+                [
+                    'type' => 'structure',
+                    'members' => ['foo' => [
+                        'type' => 'list',
+                        'member' => ['type' => 'string'],
+                        'min'  => 10,
+                        'max'  => 1,
+                    ]]
+                ],
+                ['foo' => ['bar', 'baz']],
+                "Found 2 errors while validating the input provided for the Foo operation:\n"
+                . "[foo] expected list element count to be >= 10, but found list element count of 2\n"
+                . "[foo] expected list element count to be <= 1, but found list element count of 2"
+            ],
+            [
+                [
+                    'type' => 'structure',
+                    'members' => ['foo' => ['type' => 'string']]
+                ],
+                ['foo' => new Stringable()],
+                true
+            ],
+            [
+                [
+                    'type' => 'structure',
+                    'members' => [
+                        'caps' => [
+                            'type' => 'string',
+                            'pattern' => '^[A-Z]+$'
+                        ]
+                    ]
+                ],
+                ['caps' => 'ABCd'],
+                "Found 1 error while validating the input provided for the Foo operation:\n"
+                . "[caps] Pattern /^[A-Z]+$/ failed to match 'ABCd'"
+            ]
         ];
     }
 
@@ -307,7 +372,12 @@ class ValidatorTest extends \PHPUnit_Framework_TestCase
     public function testValidatesInput($shape, $input, $result)
     {
         $shape = Shape::create($shape, new ShapeMap([]));
-        $validator = new Validator();
+        $validator = new Validator([
+            'min'      => true,
+            'required' => true,
+            'max'      => true,
+            'pattern'  => true,
+        ]);
 
         try {
             $validator->validate('Foo', $shape, $input);
@@ -321,5 +391,67 @@ class ValidatorTest extends \PHPUnit_Framework_TestCase
                 $this->assertEquals($result, $e->getMessage());
             }
         }
+    }
+
+    /**
+     * @expectedException \InvalidArgumentException
+     * @expectedExceptionMessage expected string length to be >= 1, but found string length of 0
+     */
+    public function testValidatesMinByDefault()
+    {
+        $shape = Shape::create(
+            [
+                'type' => 'structure',
+                'members' => ['foo' => ['type' => 'string', 'min' => 1]]
+            ],
+            new ShapeMap([])
+        );
+        $validator = new Validator();
+        $validator->validate('Foo', $shape, ['foo' => '']);
+    }
+
+    public function testDoesNotValidateMaxByDefault()
+    {
+        $shape = Shape::create(
+            [
+                'type' => 'structure',
+                'members' => ['foo' => ['type' => 'string', 'max' => 5]]
+            ],
+            new ShapeMap([])
+        );
+        $validator = new Validator();
+        $validator->validate('Foo', $shape, ['foo' => '1234567890']);
+    }
+
+    public function testDoesNotValidatePatternsByDefault()
+    {
+        $validator = new Validator();
+        $shape = Shape::create(
+            [
+                'type' => 'structure',
+                'members' => [
+                    'caps' => [
+                        'type' => 'string',
+                        'pattern' => '^[A-Z]+$'
+                    ]
+                ]
+            ],
+            new ShapeMap([])
+        );
+        $validator->validate('Foo', $shape, ['caps' => 'abc']);
+    }
+
+    public function testCanDisableRequiredTrait()
+    {
+        $validator = new Validator(['required' => false]);
+        $shape = Shape::create(
+            [
+                'type' => 'structure',
+                'required' => ['value'],
+                'members' => ['value' => ['type' => 'string']]
+            ],
+            new ShapeMap([])
+        );
+        $validator->validate('Foo', $shape, []);
     }
 }

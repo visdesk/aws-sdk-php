@@ -10,13 +10,52 @@ use Aws\RetryMiddleware;
 
 /**
  * This client is used to interact with the **Amazon DynamoDB** service.
+ *
+ * @method \Aws\Result batchGetItem(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise batchGetItemAsync(array $args = [])
+ * @method \Aws\Result batchWriteItem(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise batchWriteItemAsync(array $args = [])
+ * @method \Aws\Result createTable(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise createTableAsync(array $args = [])
+ * @method \Aws\Result deleteItem(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise deleteItemAsync(array $args = [])
+ * @method \Aws\Result deleteTable(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise deleteTableAsync(array $args = [])
+ * @method \Aws\Result describeTable(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise describeTableAsync(array $args = [])
+ * @method \Aws\Result getItem(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise getItemAsync(array $args = [])
+ * @method \Aws\Result listTables(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise listTablesAsync(array $args = [])
+ * @method \Aws\Result putItem(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise putItemAsync(array $args = [])
+ * @method \Aws\Result query(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise queryAsync(array $args = [])
+ * @method \Aws\Result scan(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise scanAsync(array $args = [])
+ * @method \Aws\Result updateItem(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise updateItemAsync(array $args = [])
+ * @method \Aws\Result updateTable(array $args = [])
+ * @method \GuzzleHttp\Promise\Promise updateTableAsync(array $args = [])
+ * @method \Aws\Result describeLimits(array $args = []) (supported in versions 2012-08-10)
+ * @method \GuzzleHttp\Promise\Promise describeLimitsAsync(array $args = []) (supported in versions 2012-08-10)
+ * @method \Aws\Result describeTimeToLive(array $args = []) (supported in versions 2012-08-10)
+ * @method \GuzzleHttp\Promise\Promise describeTimeToLiveAsync(array $args = []) (supported in versions 2012-08-10)
+ * @method \Aws\Result listTagsOfResource(array $args = []) (supported in versions 2012-08-10)
+ * @method \GuzzleHttp\Promise\Promise listTagsOfResourceAsync(array $args = []) (supported in versions 2012-08-10)
+ * @method \Aws\Result tagResource(array $args = []) (supported in versions 2012-08-10)
+ * @method \GuzzleHttp\Promise\Promise tagResourceAsync(array $args = []) (supported in versions 2012-08-10)
+ * @method \Aws\Result untagResource(array $args = []) (supported in versions 2012-08-10)
+ * @method \GuzzleHttp\Promise\Promise untagResourceAsync(array $args = []) (supported in versions 2012-08-10)
+ * @method \Aws\Result updateTimeToLive(array $args = []) (supported in versions 2012-08-10)
+ * @method \GuzzleHttp\Promise\Promise updateTimeToLiveAsync(array $args = []) (supported in versions 2012-08-10)
  */
 class DynamoDbClient extends AwsClient
 {
     public static function getArguments()
     {
         $args = parent::getArguments();
-        $args['retries']['default'] = 11;
+        $args['retries']['default'] = 10;
         $args['retries']['fn'] = [__CLASS__, '_applyRetryConfig'];
         $args['api_provider']['fn'] = [__CLASS__, '_applyApiProvider'];
 
@@ -51,9 +90,12 @@ class DynamoDbClient extends AwsClient
                 RetryMiddleware::createDefaultDecider($value),
                 function ($retries) {
                     return $retries
-                        ? (50 * (int) pow(2, $retries - 1)) / 1000
+                        ? RetryMiddleware::exponentialDelay($retries) / 2
                         : 0;
-                }
+                },
+                isset($args['stats']['retries'])
+                    ? (bool) $args['stats']['retries']
+                    : false
             ),
             'retry'
         );

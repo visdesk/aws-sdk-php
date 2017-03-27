@@ -3,6 +3,7 @@ namespace Aws\Test;
 
 use Aws\Api\ErrorParser\JsonRpcErrorParser;
 use Aws\AwsClient;
+use Aws\CommandInterface;
 use Aws\Credentials\Credentials;
 use Aws\Ec2\Ec2Client;
 use Aws\Ses\SesClient;
@@ -13,6 +14,7 @@ use Aws\Signature\SignatureV4;
 use Aws\Sts\StsClient;
 use Aws\WrappedHttpHandler;
 use GuzzleHttp\Promise\RejectedPromise;
+use Psr\Http\Message\RequestInterface;
 
 /**
  * @covers Aws\AwsClient
@@ -139,6 +141,20 @@ class AwsClientTest extends \PHPUnit_Framework_TestCase
             'Generator',
             $client->getIterator('ListObjects', ['Bucket' => 'foobar'])
         );
+    }
+
+    public function testCanGetIteratorWithoutDefinedPaginator()
+    {
+        $client = $this->getTestClient('ec2');
+        $data = ['foo', 'bar', 'baz'];
+        $this->addMockResults($client, [new Result([
+            'Subnets' => [$data],
+        ])]);
+        $iterator = $client->getIterator('DescribeSubnets');
+        $this->assertInstanceOf('Traversable', $iterator);
+        foreach ($iterator as $iterated) {
+            $this->assertSame($data, $iterated);
+        }
     }
 
     /**
@@ -275,6 +291,105 @@ class AwsClientTest extends \PHPUnit_Framework_TestCase
         $this->assertTrue(is_callable($provider));
     }
 
+    /**
+     * @expectedException \RuntimeException
+     * @expectedExceptionMessage Instances of Aws\AwsClient cannot be serialized
+     */
+    public function testDoesNotPermitSerialization()
+    {
+        $client = $this->createClient();
+        \serialize($client);
+    }
+
+    public function testDoesNotSignOperationsWithAnAuthTypeOfNone()
+    {
+        $client = $this->createClient(
+            [
+                'metadata' => [
+                    'signatureVersion' => 'v4',
+                ],
+                'operations' => [
+                    'Foo' => [
+                        'http' => ['method' => 'POST'],
+                    ],
+                    'Bar' => [
+                        'http' => ['method' => 'POST'],
+                        'authtype' => 'none',
+                    ],
+                ],
+            ],
+            [
+                'handler' => function (
+                    CommandInterface $command,
+                    RequestInterface $request
+                ) {
+                    foreach (['Authorization', 'X-Amz-Date'] as $signatureHeader) {
+                        if ('Bar' === $command->getName()) {
+                            $this->assertFalse($request->hasHeader($signatureHeader));
+                        } else {
+                            $this->assertTrue($request->hasHeader($signatureHeader));
+                        }
+                    }
+
+                    return new Result;
+                }
+            ]
+        );
+
+        $client->foo();
+        $client->bar();
+    }
+
+    public function testSignOperationsWithAnAuthType()
+    {
+        $client = $this->createHttpsEndpointClient(
+            [
+                'metadata' => [
+                    'signatureVersion' => 'v4',
+                ],
+                'operations' => [
+                    'Bar' => [
+                        'http' => ['method' => 'POST'],
+                        'authtype' => 'v4-unsigned-body',
+                    ],
+                ],
+            ],
+            [
+                'handler' => function (
+                    CommandInterface $command,
+                    RequestInterface $request
+                ) {
+                    foreach (['Authorization','X-Amz-Content-Sha256', 'X-Amz-Date'] as $signatureHeader) {
+                        $this->assertTrue($request->hasHeader($signatureHeader));
+                    }
+                    $this->assertEquals('UNSIGNED-PAYLOAD', $request->getHeader('X-Amz-Content-Sha256')[0]);
+                    return new Result;
+                }
+            ]
+        );
+        $client->bar();
+    }
+
+    private function createHttpsEndpointClient(array $service = [], array $config = [])
+    {
+        $apiProvider = function () use ($service) {
+            $service['metadata']['protocol'] = 'query';
+            return $service;
+        };
+
+        return new AwsClient($config + [
+            'handler'      => new MockHandler(),
+            'credentials'  => new Credentials('foo', 'bar'),
+            'signature'    => new SignatureV4('foo', 'bar'),
+            'endpoint'     => 'https://us-east-1.foo.amazonaws.com',
+            'region'       => 'foo',
+            'service'      => 'foo',
+            'api_provider' => $apiProvider,
+            'error_parser' => function () {},
+            'version'      => 'latest'
+        ]);
+    }
+
     private function createClient(array $service = [], array $config = [])
     {
         $apiProvider = function ($type) use ($service, $config) {
@@ -303,7 +418,6 @@ class AwsClientTest extends \PHPUnit_Framework_TestCase
             'region'       => 'foo',
             'service'      => 'foo',
             'api_provider' => $apiProvider,
-            'serializer'   => function () {},
             'error_parser' => function () {},
             'version'      => 'latest'
         ]);

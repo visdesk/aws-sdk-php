@@ -1,8 +1,12 @@
 <?php
 namespace Aws\Test\DynamoDb;
 
+use Aws\Command;
 use Aws\DynamoDb\DynamoDbClient;
+use Aws\DynamoDb\Exception\DynamoDbException;
+use Aws\HandlerList;
 use Aws\Test\UsesServiceTrait;
+use GuzzleHttp\Promise\RejectedPromise;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Stream;
 
@@ -79,8 +83,8 @@ class DynamoDbClientTest extends \PHPUnit_Framework_TestCase
     public function testValidatesAndRetriesCrc32()
     {
         $queue = [
-            new Response(200, ['x-amz-crc32' => '123'], 'foo'),
-            new Response(200, ['x-amz-crc32' => '2356372769'], 'foo')
+            new Response(200, ['x-amz-crc32' => '123'], '"foo"'),
+            new Response(200, ['x-amz-crc32' => '400595255'], '"foo"')
         ];
 
         $handler = function ($request, $options) use (&$queue) {
@@ -104,5 +108,29 @@ class DynamoDbClientTest extends \PHPUnit_Framework_TestCase
         ]);
 
         $this->assertEmpty($queue);
+    }
+
+    public function testAppliesRetryStatsConfig()
+    {
+        $client = new DynamoDbClient([
+            'stats' => ['retries' => true],
+            'version' => 'latest',
+            'region' => 'us-west-2',
+            'handler' => function () {
+                return new RejectedPromise(
+                    new DynamoDbException('a', new Command('b'), [
+                        'connection_error' => true,
+                    ])
+                );
+            },
+        ]);
+
+        try {
+            $client->listTables();
+            $this->fail('The operation should have failed');
+        } catch (DynamoDbException $e) {
+            $this->assertNotNull($e->getTransferInfo('retries_attempted'));
+            $this->assertGreaterThan(0, $e->getTransferInfo('retries_attempted'));
+        }
     }
 }

@@ -6,15 +6,15 @@ use Aws\AwsClient;
 use Aws\Test\UsesServiceTrait;
 
 /**
- * @covers Aws\Api\Serializer\QuerySerializer
- * @covers Aws\Api\Serializer\JsonRpcSerializer
- * @covers Aws\Api\Serializer\RestSerializer
- * @covers Aws\Api\Serializer\RestJsonSerializer
- * @covers Aws\Api\Serializer\RestXmlSerializer
- * @covers Aws\Api\Serializer\JsonBody
- * @covers Aws\Api\Serializer\XmlBody
- * @covers Aws\Api\Serializer\Ec2ParamBuilder
- * @covers Aws\Api\Serializer\QueryParamBuilder
+ * @covers \Aws\Api\Serializer\QuerySerializer
+ * @covers \Aws\Api\Serializer\JsonRpcSerializer
+ * @covers \Aws\Api\Serializer\RestSerializer
+ * @covers \Aws\Api\Serializer\RestJsonSerializer
+ * @covers \Aws\Api\Serializer\RestXmlSerializer
+ * @covers \Aws\Api\Serializer\JsonBody
+ * @covers \Aws\Api\Serializer\XmlBody
+ * @covers \Aws\Api\Serializer\Ec2ParamBuilder
+ * @covers \Aws\Api\Serializer\QueryParamBuilder
  */
 class ComplianceTest extends \PHPUnit_Framework_TestCase
 {
@@ -45,7 +45,7 @@ class ComplianceTest extends \PHPUnit_Framework_TestCase
                         $file . ': ' . $suite['description'],
                         $description,
                         $case['given']['name'],
-                        $case['params'],
+                        isset($case['params']) ? $case['params'] : [],
                         $case['serialized']
                     ];
                 }
@@ -72,12 +72,16 @@ class ComplianceTest extends \PHPUnit_Framework_TestCase
                 return $service->toArray();
             },
             'credentials'  => false,
-            'signature'    => $this->getMock('Aws\Signature\SignatureInterface'),
+            'signature'    => $this->getMockBuilder('Aws\Signature\SignatureInterface')->getMock(),
             'region'       => 'us-west-2',
             'endpoint'     => $ep,
             'error_parser' => Service::createErrorParser($service->getProtocol()),
             'serializer'   => Service::createSerializer($service, $ep),
-            'version'      => 'latest'
+            'version'      => 'latest',
+            'validate'     => false,
+            'idempotency_auto_fill' => function ($length) {
+                return str_repeat(chr(0x00), $length);
+            }
         ]);
 
         $command = $client->getCommand($name, $args);
@@ -94,7 +98,7 @@ class ComplianceTest extends \PHPUnit_Framework_TestCase
                 break;
             case 'rest-xml':
                 // Normalize XML data.
-                if ($serialized['body'] && strpos($serialized['body'], '</')) {
+                if ($serialized['body'] && preg_match('/(\<\/|\/\>)/', $serialized['body'])) {
                     $serialized['body'] = str_replace(
                         ' />',
                         '/>',

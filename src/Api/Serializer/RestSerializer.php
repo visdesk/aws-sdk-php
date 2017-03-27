@@ -1,6 +1,7 @@
 <?php
 namespace Aws\Api\Serializer;
 
+use Aws\Api\MapShape;
 use Aws\Api\Service;
 use Aws\Api\Operation;
 use Aws\Api\Shape;
@@ -8,6 +9,8 @@ use Aws\Api\StructureShape;
 use Aws\Api\TimestampShape;
 use Aws\CommandInterface;
 use GuzzleHttp\Psr7;
+use GuzzleHttp\Psr7\Uri;
+use GuzzleHttp\Psr7\UriResolver;
 use Psr\Http\Message\RequestInterface;
 
 /**
@@ -140,7 +143,15 @@ abstract class RestSerializer
 
     private function applyQuery($name, Shape $member, $value, array &$opts)
     {
-        if ($value !== null) {
+        if ($member instanceof MapShape) {
+            $opts['query'] = isset($opts['query']) && is_array($opts['query'])
+                ? $opts['query'] + $value
+                : $value;
+        } elseif ($value !== null) {
+            if ($member->getType() === 'boolean') {
+                $value = $value ? 'true' : 'false';
+            }
+            
             $opts['query'][$member['locationName'] ?: $name] = $value;
         }
     }
@@ -183,6 +194,6 @@ abstract class RestSerializer
 
         // Expand path place holders using Amazon's slightly different URI
         // template syntax.
-        return Psr7\Uri::resolve($this->endpoint, $relative);
+        return UriResolver::resolve($this->endpoint, new Uri($relative));
     }
 }

@@ -1,5 +1,5 @@
 <?php
-namespace Aws\Tests\DynamoDb;
+namespace Aws\Test\DynamoDb;
 
 use Aws\DynamoDb\Marshaler;
 use Aws\DynamoDb\BinaryValue;
@@ -174,6 +174,7 @@ class MarshalerTest extends \PHPUnit_Framework_TestCase
                 $m->set([$m->binary('a'), $m->binary('b'), $m->binary('c')]),
                 ['BS' => ['a', 'b', 'c']]
             ],
+            [$m->set(['a', 'b', 'b', 'c']), ['SS' => ['a', 'b', 'c']]],
             [$m->set([]), self::ERROR],
 
                 // Errors
@@ -375,5 +376,17 @@ JSON;
         $this->assertEquals('["foo","bar","baz"]', json_encode($set));
         $this->assertEquals(3, count($set));
         $this->assertEquals(3, iterator_count($set));
+    }
+
+    public function testUnmarshalItemDoesNotCreateReferences()
+    {
+        $m = new Marshaler();
+        $result = $m->unmarshalItem([
+            'foo' => ['S' => 'bar'],
+        ]);
+        $resultCopy = $result;
+        $resultCopy['foo_copy'] = $resultCopy['foo'];
+        $resultCopy['foo'] = 'baz';
+        $this->assertEquals('bar', $result['foo']);
     }
 }
